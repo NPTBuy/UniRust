@@ -27,6 +27,7 @@ pub(crate) enum LastModifier {
     HornWSingle { idx: usize, orig_char: char },
     HornWPair { idx1: usize, orig1: char, idx2: usize, orig2: char },
     Tone(Tone),
+    ToneRemoved { removed_tone: Tone },
 }
 
 /// Snapshot of a committed word for the Word History buffer
@@ -106,6 +107,15 @@ impl TelexEngine {
         }
     }
 
+    /// Check if current word contains a literal 'z' / 'Z'.
+    /// Because 'z' is not part of the Vietnamese alphabet, any word containing 'z'
+    /// is treated as non-Vietnamese (English / foreign / raw) to prevent unintended
+    /// subsequent Telex transforms on words like 'razer', 'azure', 'size', 'crazy', 'frozen', 'pizza', 'buzz'.
+    #[inline]
+    pub fn has_literal_z(&self) -> bool {
+        self.raw_chars.iter().any(|&(c, _)| c == 'z' || c == 'Z')
+    }
+
     /// Handle Backspace key: Smart Backspace Popping
     /// - If active syllable buffer is non-empty: pop last rendered character / raw keystroke, re-evaluate display.
     /// - If active syllable buffer is empty and history is non-empty: pop most recent word from history back into active buffer.
@@ -163,7 +173,20 @@ impl TelexEngine {
             return action;
         }
 
-        // 2. Check 'd' stroke: 'd' + 'd' -> 'đ'
+        // 2. If active word already contains a literal 'z', mark as non-Vietnamese:
+        // Skip all subsequent Telex transforms (no tones, no circumflex, no horn/breve, no stroke-d)
+        // so English words like 'razer', 'azure', 'size', 'crazy', 'frozen', 'pizza', 'buzz'
+        // are typed cleanly without unintended transformations.
+        if self.has_literal_z() {
+            self.raw_chars.push((lower, is_upper));
+            self.last_modifier = LastModifier::None;
+            let new_display = self.rebuild_display();
+            let action = self.compute_action(&new_display, false);
+            self.current_display = new_display;
+            return action;
+        }
+
+        // 3. Check 'd' stroke: 'd' + 'd' -> 'đ'
         if lower == 'd' {
             if let Some(action) = self.try_stroke_d(is_upper) {
                 return action;
@@ -226,6 +249,7 @@ impl TelexEngine {
                 (Tone::Dot, 'j') => true,
                 _ => false,
             },
+            (LastModifier::ToneRemoved { .. }, 'z') => true,
             _ => false,
         };
 
@@ -274,6 +298,10 @@ impl TelexEngine {
             LastModifier::Tone(_) => {
                 self.tone = Tone::None;
                 self.raw_chars.push((lower, is_upper));
+            }
+            LastModifier::ToneRemoved { removed_tone } => {
+                self.tone = removed_tone;
+                self.raw_chars.push(('z', is_upper));
             }
             LastModifier::None => unreachable!(),
         }
@@ -489,6 +517,23 @@ impl TelexEngine {
         let has_vowel = self.raw_chars.iter().any(|&(c, _)| is_vowel_char(c));
         if !has_vowel {
             return None;
+        }
+
+        // Special handling for Tone::None ('z'):
+        // Only treat 'z' as a tone-removal command if the syllable currently has a non-empty tone.
+        // If tone is already None, return None so 'z' is emitted as a literal consonant.
+        if target_tone == Tone::None {
+            if self.tone == Tone::None {
+                return None;
+            }
+            let removed_tone = self.tone;
+            self.tone = Tone::None;
+            self.last_modifier = LastModifier::ToneRemoved { removed_tone };
+
+            let new_display = self.rebuild_display();
+            let action = self.compute_action(&new_display, true);
+            self.current_display = new_display;
+            return Some(action);
         }
 
         // UniKey rule: Stop consonants (c, ch, p, t) can ONLY take Acute ('s') or Dot ('j') tones in Vietnamese.
@@ -1080,5 +1125,71 @@ mod tests {
             "awn quar nhows ker troongf caay",
             "ăn quả nhớ kẻ trồng cây",
         );
+    }
+
+    #[test]
+    fn test_telex_z_specification() {
+        // 1. Tone removal only when tone exists:
+        assert_eq!(type_word("raz"), "raz");
+        assert_eq!(type_word("RAZ"), "RAZ");
+        assert_eq!(type_word("siz"), "siz");
+        assert_eq!(type_word("quiz"), "quiz");
+        assert_eq!(type_word("zoo"), "zoo");
+
+        // 2. English words with literal 'z' do not trigger retroactive Telex transforms:
+        assert_eq!(type_word("razer"), "razer");
+        assert_eq!(type_word("azure"), "azure");
+        assert_eq!(type_word("size"), "size");
+        assert_eq!(type_word("crazy"), "crazy");
+        assert_eq!(type_word("frozen"), "frozen");
+        assert_eq!(type_word("pizza"), "pizza");
+        assert_eq!(type_word("buzz"), "buzz");
+
+        // 3. Valid tone removal:
+        assert_eq!(type_word("rasz"), "ra");
+        assert_eq!(type_word("toasz"), "toa");
+
+        // 4. Double-z undo:
+        assert_eq!(type_word("raszz"), "ráz");
+        assert_eq!(type_word("toaszz"), "toáz");
+    }
+
+    #[test]
+    fn test_telex_z_backspace() {
+        let mut engine = TelexEngine::new();
+        let mut output = String::new();
+
+        // Type "raz"
+        for ch in "raz".chars() {
+            match engine.process_char(ch) {
+                EngineAction::PassThrough => output.push(ch),
+                EngineAction::Transform { delete_count, replacement } => {
+                    for _ in 0..delete_count { output.pop(); }
+                    output.push_str(&replacement);
+                }
+                EngineAction::Reset => output.push(ch),
+            }
+        }
+        assert_eq!(output, "raz");
+        assert_eq!(engine.current_display, "raz");
+
+        // Press Backspace: "raz" + Backspace -> "ra"
+        engine.backspace();
+        output.pop();
+        assert_eq!(engine.current_display, "ra");
+        assert_eq!(output, "ra");
+
+        // Subsequent typing after backspacing 'z' resumes normal Vietnamese transforms:
+        // "ra" + 's' -> "rá"
+        match engine.process_char('s') {
+            EngineAction::PassThrough => output.push('s'),
+            EngineAction::Transform { delete_count, replacement } => {
+                for _ in 0..delete_count { output.pop(); }
+                output.push_str(&replacement);
+            }
+            EngineAction::Reset => output.push('s'),
+        }
+        assert_eq!(output, "rá");
+        assert_eq!(engine.current_display, "rá");
     }
 }
