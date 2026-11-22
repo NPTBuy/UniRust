@@ -1,6 +1,6 @@
 [package]
 name = "unirust"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Phạm Ngọc Trí (NPTBuy) <tri.phamngoc2006@gmail.com>"]
 description = "Clean, pure Rust re-implementation of UniKey Vietnamese Input Method"
