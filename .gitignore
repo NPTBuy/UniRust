@@ -1,0 +1,31 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# UniKey reference & vendor source packages
+vendor/
+x-unikey-*/
+*.zip
+*.tar.gz
+
+# IDE & Editor artifacts
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Windows OS artifacts
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Test artifacts & temporary profiles
+tests/edge_typing_profile*
+tests/edge_test_profile*
+edge_typing_profile*
+edge_diag_profile*
+edge_test_profile*
+*.log
+scratch/

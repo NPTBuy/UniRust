@@ -1,0 +1,40 @@
+[package]
+name = "unirust"
+version = "0.1.0"
+edition = "2021"
+authors = ["Phạm Ngọc Trí (NPTBuy) <tri.phamngoc2006@gmail.com>"]
+description = "Clean, pure Rust re-implementation of UniKey Vietnamese Input Method"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/NPTBuy/UniRust"
+readme = "README.md"
+keywords = ["vietnamese", "ime", "telex", "unikey", "input-method"]
+categories = ["internationalization", "gui"]
+
+[dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Threading",
+    "Win32_System_LibraryLoader",
+    "Win32_Security",
+    "Win32_UI_Accessibility",
+    "Win32_System_Com",
+] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[[bin]]
+name = "unikey-rs"
+path = "src/bin/unikey-rs.rs"
+
+[[bin]]
+name = "unirust"
+path = "src/bin/unirust.rs"

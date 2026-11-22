@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <title>Vietnamese IME Fast-Typing E2E Test</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #1e1e2e;
+      color: #cdd6f4;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      padding: 20px;
+      box-sizing: border-box;
+    }
+    .container {
+      background: #181825;
+      border: 1px solid #313244;
+      border-radius: 12px;
+      padding: 30px;
+      width: 100%;
+      max-width: 720px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    }
+    h1 {
+      margin-top: 0;
+      font-size: 24px;
+      color: #89b4fa;
+      text-align: center;
+    }
+    .words-box {
+      font-size: 20px;
+      letter-spacing: 0.5px;
+      padding: 16px;
+      background: #11111b;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      color: #a6adc8;
+      line-height: 1.6;
+    }
+    .word {
+      display: inline-block;
+      margin-right: 10px;
+    }
+    .word.active {
+      color: #f9e2af;
+      text-decoration: underline;
+    }
+    .word.correct {
+      color: #a6e3a1;
+    }
+    .word.incorrect {
+      color: #f38ba8;
+    }
+    input#typing-input {
+      width: 100%;
+      font-size: 20px;
+      padding: 12px 16px;
+      background: #313244;
+      border: 2px solid #45475a;
+      border-radius: 8px;
+      color: #cdd6f4;
+      outline: none;
+      box-sizing: border-box;
+      transition: border-color 0.2s;
+    }
+    input#typing-input:focus {
+      border-color: #89b4fa;
+    }
+    .status-panel {
+      margin-top: 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    #status-badge {
+      font-weight: bold;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 14px;
+      background: #45475a;
+    }
+    #status-badge.passed {
+      background: #a6e3a1;
+      color: #11111b;
+    }
+    #status-badge.failed {
+      background: #f38ba8;
+      color: #11111b;
+    }
+    #status-badge.running {
+      background: #f9e2af;
+      color: #11111b;
+    }
+    #event-log {
+      margin-top: 20px;
+      height: 160px;
+      overflow-y: auto;
+      background: #11111b;
+      border-radius: 6px;
+      padding: 10px;
+      font-family: monospace;
+      font-size: 12px;
+      color: #9399b2;
+    }
+    .log-err {
+      color: #f38ba8;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Vietnamese IME Fast-Typing E2E Test</h1>
+    <div class="words-box" id="words-container"></div>
+    <input id="typing-input" type="text" autocomplete="off" autofocus placeholder="Type words here..." />
+    <div class="status-panel">
+      <div>Status: <span id="status-badge" class="running">WAITING FOR INPUT</span></div>
+      <div id="stats">Completed: 0 / 9 | Errors: 0</div>
+    </div>
+    <div id="event-log"></div>
+  </div>
+
+  <script>
+    const TARGET_WORDS = [
+      "tiếng", "việt", "trường", "người", "sửa", "giữa", "đến", "hoà", "thuỷ"
+    ];
+
+    let currentWordIndex = 0;
+    let unexpectedSpaceFired = false;
+    let failureReason = null;
+    let completedWords = [];
+    const eventLog = document.getElementById("event-log");
+    const statusBadge = document.getElementById("status-badge");
+    const stats = document.getElementById("stats");
+    const input = document.getElementById("typing-input");
+    const container = document.getElementById("words-container");
+
+    window.__testResult = {
+      status: "WAITING",
+      passed: false,
+      completedWords: [],
+      error: null,
+      events: []
+    };
+
+    function log(msg, isErr = false) {
+      const div = document.createElement("div");
+      div.innerText = `[${new Date().toISOString().substring(11, 23)}] ${msg}`;
+      if (isErr) div.className = "log-err";
+      eventLog.appendChild(div);
+      eventLog.scrollTop = eventLog.scrollHeight;
+      window.__testResult.events.push(msg);
+    }
+
+    function renderWords() {
+      container.innerHTML = "";
+      TARGET_WORDS.forEach((w, i) => {
+        const span = document.createElement("span");
+        span.className = "word" + (i === currentWordIndex ? " active" : "") +
+                         (i < currentWordIndex ? " correct" : "");
+        span.innerText = w;
+        container.appendChild(span);
+      });
+      stats.innerText = `Completed: ${currentWordIndex} / ${TARGET_WORDS.length} | Errors: ${unexpectedSpaceFired ? 1 : 0}`;
+    }
+
+    renderWords();
+
+    window.onload = () => {
+      setTimeout(() => {
+        input.focus();
+        input.click();
+      }, 100);
+    };
+
+    input.addEventListener("keydown", (e) => {
+      if (statusBadge.innerText === "WAITING FOR INPUT") {
+        statusBadge.innerText = "RUNNING";
+        statusBadge.className = "running";
+        window.__testResult.status = "RUNNING";
+      }
+
+      const isSpace = (e.key === " " || e.code === "Space" || e.keyCode === 32);
+
+      if (isSpace) {
+        // Space event received!
+        const curVal = input.value.trim();
+        const target = TARGET_WORDS[currentWordIndex];
+
+        // If the typed value doesn't yet match the target word, this is an unexpected mid-word Space!
+        if (curVal !== target) {
+          unexpectedSpaceFired = true;
+          failureReason = `PREMATURE_MIDWORD_SPACE at word index ${currentWordIndex} ('${target}'), input value was: '${input.value}'`;
+          log(`FAIL: ${failureReason}`, true);
+          statusBadge.innerText = "FAILED (MIDWORD SPACE)";
+          statusBadge.className = "failed";
+          window.__testResult.status = "FAILED";
+          window.__testResult.passed = false;
+          window.__testResult.error = failureReason;
+
+          // Post failure result back to runner
+          document.title = `TEST_FAILED: ${failureReason}`;
+          fetch("/result", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(window.__testResult)
+          }).catch(() => {});
+          return;
+        }
+
+        // Expected word boundary space!
+        e.preventDefault();
+        completedWords.push(curVal);
+        log(`Word completed: '${curVal}'`);
+        input.value = "";
+        currentWordIndex++;
+        renderWords();
+
+        if (currentWordIndex >= TARGET_WORDS.length) {
+          // All words completed successfully!
+          statusBadge.innerText = "PASSED";
+          statusBadge.className = "passed";
+          window.__testResult.status = "PASSED";
+          window.__testResult.passed = true;
+          window.__testResult.completedWords = completedWords;
+          log("SUCCESS: All words typed cleanly with ZERO premature mid-word spaces!");
+
+          // Update document title for title-based test runners
+          document.title = `TEST_PASSED: ${completedWords.join(", ")}`;
+
+          // Post success result back to runner
+          fetch("/result", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(window.__testResult)
+          }).catch(() => {});
+        }
+      }
+    });
+
+    input.addEventListener("input", (e) => {
+      log(`input: value='${input.value}', data='${e.data}'`);
+    });
+  </script>
+</body>
+</html>
