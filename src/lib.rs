@@ -14,9 +14,9 @@ use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS, HINSTANCE, 
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, MessageBoxW, PostQuitMessage,
-    RegisterClassW, TranslateMessage, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
-    MB_ICONINFORMATION, MB_OK, WM_DESTROY,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, KillTimer, MessageBoxW,
+    PostQuitMessage, RegisterClassW, SetTimer, TranslateMessage, MSG, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WNDCLASSW, MB_ICONINFORMATION, MB_OK, WM_DESTROY, WM_TIMER,
 };
 
 use hook::{install_keyboard_hook, uninstall_keyboard_hook};
@@ -24,6 +24,9 @@ use tray::{TrayIcon, WM_APP_TRAY_MSG};
 
 const CLASS_NAME: &windows::core::PCWSTR = &w!("UniRustMainWnd");
 const MUTEX_NAME: &windows::core::PCWSTR = &w!("Global\\UniRust_SingleInstance");
+
+const TRIM_TIMER_ID: usize = 1001;
+const TRIM_DELAY_MS: u32 = 2500;
 
 // Store TrayIcon pointer in window user data
 static mut GLOBAL_TRAY: Option<TrayIcon> = None;
@@ -79,10 +82,13 @@ pub fn run() -> windows::core::Result<()> {
         let tray = TrayIcon::new(hwnd)?;
         GLOBAL_TRAY = Some(tray);
 
-        // 5. Install Low-Level Keyboard and Mouse Hooks
+        // 5. One-Shot Working Set Trim Timer: releases initial startup pages strictly once after 2.5s
+        SetTimer(hwnd, TRIM_TIMER_ID, TRIM_DELAY_MS, None);
+
+        // 6. Install Low-Level Keyboard and Mouse Hooks
         install_keyboard_hook(Some(hwnd))?;
 
-        // 6. Run Win32 Message Pump
+        // 7. Run Win32 Message Pump
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).into() {
             let _ = TranslateMessage(&msg);
@@ -115,6 +121,21 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, w_param: WPARAM, l_para
             let is_viet = w_param.0 != 0;
             if let Some(tray) = GLOBAL_TRAY.as_mut() {
                 tray.update_mode(is_viet);
+            }
+            LRESULT(0)
+        }
+        WM_TIMER => {
+            if w_param.0 == TRIM_TIMER_ID {
+                let _ = KillTimer(hwnd, TRIM_TIMER_ID);
+                // One-shot working set trim: frees startup pages from kernel32.dll (zero psapi dependency)
+                unsafe {
+                    let _ = windows::Win32::System::Memory::SetProcessWorkingSetSizeEx(
+                        windows::Win32::System::Threading::GetCurrentProcess(),
+                        usize::MAX,
+                        usize::MAX,
+                        windows::Win32::System::Memory::SETPROCESSWORKINGSETSIZEEX_FLAGS(0),
+                    );
+                }
             }
             LRESULT(0)
         }

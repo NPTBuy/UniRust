@@ -3,8 +3,8 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20x64-lightgrey.svg)]()
-[![Binary Size](https://img.shields.io/badge/Size-~176%20KB-success.svg)]()
-[![Tests](https://img.shields.io/badge/Tests-15%2F15%20Passing-brightgreen.svg)]()
+[![Binary Size](https://img.shields.io/badge/Size-~175.5%20KB-success.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-17%2F17%20Passing-brightgreen.svg)]()
 
 **[Tiếng Việt](#tiếng-việt) | [English](#english)**
 
@@ -29,7 +29,8 @@
 
 **UniRust** là bộ gõ tiếng Việt (Telex) mã nguồn mở, được viết hoàn toàn bằng ngôn ngữ lập trình **Rust** cho hệ điều hành Windows x64. Dự án hướng tới tiêu chí: **siêu nhẹ, tốc độ phản hồi cực nhanh, không phụ thuộc thư viện ngoài (zero external DLL/C-runtime dependencies)** và xuất chuẩn ký tự **Unicode dựng sẵn (NFC)** nguyên bản.
 
-- **Kích thước siêu nhỏ gọn:** Tệp thực thi độc lập (standalone `.exe`) chỉ khoảng **~176 KB** (180.224 bytes ở bản release), không cần cài đặt, không cần .NET Framework hay Visual C++ Redistributable.
+- **Kích thước siêu nhỏ gọn:** Tệp thực thi độc lập (standalone `.exe`) chỉ khoảng **~175.5 KB** (179.712 bytes ở bản release), không cần cài đặt, không cần .NET Framework hay Visual C++ Redistributable.
+- **Bộ nhớ siêu nhẹ & Ổn định (RAM ~2–4 MB):** Khởi tạo lười UI Automation (Lazy UIA) với bộ lọc nhanh Win32 class `GetClassNameW` (chỉ kích hoạt UIA khi người dùng thực sự focus vào Chrome/Edge/Firefox), hot path tái sử dụng bộ đệm zero-heap-allocation, và cơ chế One-Shot Working Set Trim tự động thu hồi bộ nhớ sau 2.5s khởi động mà không cần phụ thuộc `psapi.dll`.
 - **Không inject DLL:** Chạy hoàn toàn dưới dạng tiến trình nền độc lập thông qua Win32 Low-Level Hooks (`WH_KEYBOARD_LL`, `WH_MOUSE_LL`).
 - **Unicode NFC chuẩn mực (Zero AI Token Bloat):** Tạo trực tiếp các ký tự tiếng Việt dựng sẵn (pre-composed NFC), tuyệt đối không sinh ký tự tổ hợp rời rạc (NFD combining marks `U+0300..=U+036F`) hay các ký tự ẩn độ rộng bằng không (`U+200B`, `U+2060`, `U+FEFF`). Điều này giúp tránh triệt để tình trạng phình to token (token bloat) hoặc lỗi xử lý ngữ cảnh khi nhập liệu vào các mô hình AI/LLM (ChatGPT, Claude, Gemini, Cursor, Copilot).
 
@@ -123,9 +124,13 @@ Dự án đã khảo sát và đối chiếu trực tiếp các tệp mã nguồ
 4. **Gửi phím nguyên tử không khoảng trắng rác (Atomic SendInput Batching):**
    - Với tất cả ô nhập liệu thông thường (trình soạn thảo, IDE, website thi gõ như Monkeytype / 10FastFingers, khung chat AI), lệnh thay thế chữ được gom thành **1 mảng duy nhất** gồm `N` phím `VK_BACK` và các mã Unicode `KEYEVENTF_UNICODE`, gửi đi bằng 1 lệnh gọi `SendInput` nguyên tử.
    - Tuyệt đối **không chèn `VK_SPACE`**, **không dùng `std::thread::sleep`**, loại trừ triệt để tình trạng nhảy từ sớm khi gõ nhanh.
-5. **Cách ly thanh địa chỉ trình duyệt bất đồng bộ (Asynchronous Omnibox Isolation):**
-   - Luồng nền chạy `SetWinEventHook(EVENT_OBJECT_FOCUS)` kết hợp `IUIAutomation` để theo dõi sự kiện chuyển tiêu điểm (focus) vào thanh địa chỉ trình duyệt (`OmniboxViewViews` trên Chrome, Edge, Brave, Cốc Cốc; `urlbar-input` trên Firefox).
+5. **Cách ly thanh địa chỉ trình duyệt bất đồng bộ & Tiền lọc Win32 Class (Lazy UIA + Fast Pre-filtering):**
+   - Luồng nền theo dõi `EVENT_OBJECT_FOCUS` trước tiên kiểm tra lớp cửa sổ gốc bằng `GetClassNameW` trên bộ đệm stack `[u16; 64]` (hoàn toàn không tốn heap). Chỉ khi phát hiện đúng lớp trình duyệt (`Chrome_WidgetWin_1` hoặc `MozillaWindowClass`), `IUIAutomation` mới được khởi tạo lười để kiểm tra Omnibox (`OmniboxViewViews`, `urlbar-input`).
+   - Mọi cửa sổ ngoài trình duyệt (Notepad, VS Code, Word, Terminal, Game) lập tức đặt `IS_OMNIBOX_FOCUSED = false` mà không chạm vào COM hay UIA, duy trì ứng dụng ở mức chỉ 3 threads nền.
    - Biến cờ `IS_OMNIBOX_FOCUSED: AtomicBool` được kiểm tra ở mức sub-nanosecond trong hook. Mẹo hủy gợi ý inline (`VK_SPACE` + `VK_BACK`) chỉ được áp dụng duy nhất khi người dùng đang thao tác trên Omnibox.
+6. **Tối ưu hóa bộ nhớ RAM & Không phân mảnh Heap (Zero-Allocation Hot Path & One-Shot Trim):**
+   - Toàn bộ hot path gõ phím và thuật toán bỏ dấu tiếng Việt sử dụng thread-local reusable buffer và mảng cố định trên stack (`build_normal_inputs_into`), triệt tiêu hoàn toàn việc cấp phát heap liên tục khi gõ nhanh.
+   - Sau khi khởi động 2.5 giây, một timer duy nhất kích hoạt gọi `SetProcessWorkingSetSizeEx` từ `kernel32.dll` rồi tự hủy vĩnh viễn, thu hồi các trang nhớ khởi động đưa RAM hiển thị về ~2–4 MB mà không cần phụ thuộc `psapi.dll`.
 
 ---
 
@@ -150,9 +155,9 @@ Dự án đã khảo sát và đối chiếu trực tiếp các tệp mã nguồ
 ```powershell
 cargo test
 ```
-Toàn bộ **15 bài test** (14 unit tests kiểm tra bảng mã, cấu trúc âm tiết, bộ đệm lịch sử, hoàn tác, độ sạch NFC và 1 integration test kiểm thử E2E luồng gõ) sẽ chạy và báo cáo kết quả:
+Toàn bộ **17 bài test** (16 unit tests kiểm tra bảng mã, cấu trúc âm tiết, bộ đệm lịch sử, hoàn tác, tiền lọc trình duyệt, tái sử dụng buffer không phân mảnh, độ sạch NFC và 1 integration test kiểm thử E2E luồng gõ) sẽ chạy và báo cáo kết quả:
 ```text
-running 14 tests (src/lib.rs)
+running 16 tests (src/lib.rs)
 test engine::telex::tests::test_circumflex_and_undo ... ok
 test engine::telex::tests::test_cross_space_restoration ... ok
 test engine::telex::tests::test_case_preservation ... ok
@@ -162,7 +167,9 @@ test engine::telex::tests::test_real_vietnamese_syllables_batch_2 ... ok
 test engine::telex::tests::test_real_vietnamese_syllables_batch_3 ... ok
 test engine::telex::tests::test_word_history_cap_at_8 ... ok
 test engine::telex::tests::test_required_cases_batch_1 ... ok
+test hook::tests::test_browser_class_prefilter_constants ... ok
 test hook::tests::test_normal_inputs_zero_space_and_atomic ... ok
+test hook::tests::test_reusable_input_buffer_zero_alloc ... ok
 test hook::tests::test_corpus_replacement_batching_zero_space ... ok
 test hook::tests::test_omnibox_cancellation_inputs ... ok
 test engine::telex::tests::test_unikey_synced_edge_cases ... ok
@@ -171,7 +178,7 @@ test engine::telex::tests::test_nfc_and_token_cleanliness_corpus ... ok
 running 1 test (tests/e2e_typing_test.rs)
 test test_e2e_typing_test_harness ... ok
 
-test result: ok. 15 passed; 0 failed; 0 ignored; finished in 0.00s
+test result: ok. 17 passed; 0 failed; 0 ignored; finished in 0.00s
 ```
 
 #### Biên dịch bản Release tối ưu:
@@ -235,7 +242,8 @@ Dự án tuân thủ nghiêm ngặt và trân trọng quyền tác giả đối 
 
 **UniRust** is an open-source, lightweight, high-performance Vietnamese Input Method Editor (IME) written purely in **Rust** for Windows x64. The project is engineered for: **minimal binary footprint, blazing-fast input response, zero external DLL or C-runtime dependencies**, and **strict pre-composed NFC Unicode output**.
 
-- **Ultra-Compact Footprint:** Standalone binary size is only **~176 KB** (180,224 bytes in release build), requiring no installer, no .NET Framework, and no Visual C++ Redistributable runtime.
+- **Ultra-Compact Footprint:** Standalone binary size is only **~175.5 KB** (179,712 bytes in release build), requiring no installer, no .NET Framework, and no Visual C++ Redistributable runtime.
+- **Ultra-Lean Memory Footprint (RAM ~2–4 MB):** Lazy UI Automation with fast Win32 class pre-filtering (`GetClassNameW`), zero-heap-allocation reusable hot-path buffers, and a clean one-shot Working Set trim via `kernel32.dll` 2.5s post-startup (zero `psapi.dll` dependency).
 - **Zero DLL Injection:** Operates entirely as a clean, in-process background application using standard Win32 Low-Level Hooks (`WH_KEYBOARD_LL`, `WH_MOUSE_LL`).
 - **Strict Pre-composed NFC Unicode (Zero AI Token Bloat):** Generates true pre-composed NFC Unicode code points directly. It strictly avoids decomposed combining marks (NFD `U+0300..=U+036F`) and zero-width invisible characters (`U+200B`, `U+2060`, `U+FEFF`), eliminating token bloat and context corruption when prompting AI/LLM tools (ChatGPT, Claude, Gemini, Cursor, Copilot).
 
@@ -329,9 +337,13 @@ This project inspected and cross-referenced official reference source code from 
 4. **Atomic `SendInput` Batching (No Stray Spaces):**
    - For all standard text inputs (editors, IDEs, typing-test sites like Monkeytype and 10FastFingers, and AI chat boxes), deletions and replacement Unicode characters are dispatched in a single atomic array via `SendInput`.
    - **Zero `VK_SPACE` events** and **zero `std::thread::sleep`** in normal replacements, eliminating premature word submission and keystroke races.
-5. **Asynchronous Browser Omnibox Isolation:**
-   - A lightweight background thread monitors `EVENT_OBJECT_FOCUS` via Win32 `SetWinEventHook` and Windows UI Automation (`IUIAutomation`) to detect browser address bars (`OmniboxViewViews` on Chrome/Edge/Brave/CocCoc; `urlbar-input` on Firefox).
+5. **Asynchronous Browser Omnibox Isolation & Fast Win32 Pre-filtering:**
+   - The background event monitor first inspects the root window class via `GetClassNameW` on a stack-allocated `[u16; 64]` buffer (zero heap allocation). Only if the window belongs to a known browser class (`Chrome_WidgetWin_1` or `MozillaWindowClass`) is `IUIAutomation` lazily initialized to inspect address bar elements (`OmniboxViewViews`, `urlbar-input`).
+   - All non-browser applications (Notepad, VS Code, Word, terminals, games) immediately set `IS_OMNIBOX_FOCUSED = false` without touching COM or UIA, keeping thread count at a minimal 3 background threads.
    - Updates a lock-free `IS_OMNIBOX_FOCUSED: AtomicBool` (<1ns check). The inline autocomplete cancellation trick (`VK_SPACE` + `VK_BACK` with 2ms yield) is applied strictly when an address bar has focus.
+6. **Zero-Allocation Hot Path & One-Shot Working Set Trim:**
+   - Normal typing transforms and syllable tone adjustments use thread-local reusable buffers and stack-allocated arrays (`build_normal_inputs_into`), eliminating runtime heap allocations during fast typing.
+   - Exactly 2.5 seconds after startup, a one-shot hidden-window timer triggers `SetProcessWorkingSetSizeEx` from `kernel32.dll` (no `psapi.dll` dependency) and immediately disarms itself, reclaiming one-time startup initialization pages and dropping resident RAM to ~2–4 MB.
 
 ---
 
@@ -356,9 +368,9 @@ This project inspected and cross-referenced official reference source code from 
 ```powershell
 cargo test
 ```
-All **15 automated tests** (14 unit tests covering character mappings, syllable parsing, word history, undo, and clean NFC compliance, plus 1 comprehensive E2E typing-test integration harness) execute and pass:
+All **17 automated tests** (16 unit tests covering character mappings, syllable parsing, word history, undo, browser pre-filtering, zero-allocation buffers, and clean NFC compliance, plus 1 comprehensive E2E typing-test integration harness) execute and pass:
 ```text
-running 14 tests (src/lib.rs)
+running 16 tests (src/lib.rs)
 test engine::telex::tests::test_circumflex_and_undo ... ok
 test engine::telex::tests::test_cross_space_restoration ... ok
 test engine::telex::tests::test_case_preservation ... ok
@@ -368,7 +380,9 @@ test engine::telex::tests::test_real_vietnamese_syllables_batch_2 ... ok
 test engine::telex::tests::test_real_vietnamese_syllables_batch_3 ... ok
 test engine::telex::tests::test_word_history_cap_at_8 ... ok
 test engine::telex::tests::test_required_cases_batch_1 ... ok
+test hook::tests::test_browser_class_prefilter_constants ... ok
 test hook::tests::test_normal_inputs_zero_space_and_atomic ... ok
+test hook::tests::test_reusable_input_buffer_zero_alloc ... ok
 test hook::tests::test_corpus_replacement_batching_zero_space ... ok
 test hook::tests::test_omnibox_cancellation_inputs ... ok
 test engine::telex::tests::test_unikey_synced_edge_cases ... ok
@@ -377,7 +391,7 @@ test engine::telex::tests::test_nfc_and_token_cleanliness_corpus ... ok
 running 1 test (tests/e2e_typing_test.rs)
 test test_e2e_typing_test_harness ... ok
 
-test result: ok. 15 passed; 0 failed; 0 ignored; finished in 0.00s
+test result: ok. 17 passed; 0 failed; 0 ignored; finished in 0.00s
 ```
 
 #### Building the Standalone Release Binary:

@@ -576,15 +576,18 @@ impl TelexEngine {
             }
         }
 
-        // 2. Collect vowel indices in rhyme
-        let mut vowel_indices = Vec::new();
+        // 2. Collect vowel indices in rhyme (stack-allocated buffer - zero heap allocation)
+        let mut vowel_indices = [0usize; 8];
+        let mut vowel_count = 0;
         for i in vowel_start_idx..chars.len() {
-            if is_vowel_char(chars[i].0) {
-                vowel_indices.push(i);
+            if is_vowel_char(chars[i].0) && vowel_count < vowel_indices.len() {
+                vowel_indices[vowel_count] = i;
+                vowel_count += 1;
             }
         }
+        let active_vowels = &vowel_indices[..vowel_count];
 
-        if vowel_indices.is_empty() {
+        if vowel_count == 0 {
             // No rhyming vowel found; assemble un-toned
             return chars
                 .iter()
@@ -593,11 +596,11 @@ impl TelexEngine {
         }
 
         // 3. Determine target vowel index according to Standard Tone Placement Rules
-        let target_idx = self.select_tone_vowel_index(&chars, &vowel_indices);
+        let target_idx = self.select_tone_vowel_index(&chars, active_vowels);
 
         // 4. Apply tone to target vowel, ensure all others have Tone::None
         for (i, item) in chars.iter_mut().enumerate() {
-            if vowel_indices.contains(&i) {
+            if active_vowels.contains(&i) {
                 let stripped = strip_tone_from_char(item.0);
                 if i == target_idx {
                     item.0 = apply_tone_to_char(stripped, tone);

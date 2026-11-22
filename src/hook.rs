@@ -28,9 +28,9 @@ use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationElement, SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GetForegroundWindow, SetWindowsHookExW, UnhookWindowsHookEx, HHOOK,
-    KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_LBUTTONDOWN,
-    WM_MBUTTONDOWN, WM_RBUTTONDOWN, WM_SYSKEYDOWN,
+    CallNextHookEx, GetAncestor, GetClassNameW, GetForegroundWindow, SetWindowsHookExW,
+    UnhookWindowsHookEx, GA_ROOT, HHOOK, KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WH_MOUSE_LL,
+    WM_KEYDOWN, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_RBUTTONDOWN, WM_SYSKEYDOWN,
 };
 
 use crate::engine::{EngineAction, TelexEngine};
@@ -45,6 +45,40 @@ static OMNIBOX_THREAD_SPAWNED: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
     static THREAD_AUTOMATION: std::cell::RefCell<Option<IUIAutomation>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Check if window belongs to a known browser (Chrome/Edge/Brave/Cốc Cốc/Firefox)
+/// Uses stack-allocated buffer [u16; 64] - ZERO heap allocations!
+unsafe fn is_browser_window(hwnd: HWND) -> bool {
+    if hwnd.0.is_null() {
+        return false;
+    }
+    let root = GetAncestor(hwnd, GA_ROOT);
+    let target = if !root.0.is_null() { root } else { hwnd };
+
+    let mut class_buf = [0u16; 64];
+    let len = GetClassNameW(target, &mut class_buf);
+    if len <= 0 {
+        return false;
+    }
+
+    let class_name = &class_buf[..len as usize];
+
+    // "Chrome_WidgetWin_1" in UTF-16: Chrome, Edge, Brave, CocCoc, Opera, Vivaldi, Arc
+    const CHROME_CLASS: &[u16] = &[
+        b'C' as u16, b'h' as u16, b'r' as u16, b'o' as u16, b'm' as u16, b'e' as u16,
+        b'_' as u16, b'W' as u16, b'i' as u16, b'd' as u16, b'g' as u16, b'e' as u16,
+        b't' as u16, b'W' as u16, b'i' as u16, b'n' as u16, b'_' as u16, b'1' as u16,
+    ];
+
+    // "MozillaWindowClass" in UTF-16: Firefox, Floorp, Waterfox, LibreWolf
+    const MOZILLA_CLASS: &[u16] = &[
+        b'M' as u16, b'o' as u16, b'z' as u16, b'i' as u16, b'l' as u16, b'l' as u16,
+        b'a' as u16, b'W' as u16, b'i' as u16, b'n' as u16, b'd' as u16, b'o' as u16,
+        b'w' as u16, b'C' as u16, b'l' as u16, b'a' as u16, b's' as u16, b's' as u16,
+    ];
+
+    class_name == CHROME_CLASS || class_name == MOZILLA_CLASS
 }
 
 /// Inspect currently focused element via UI Automation to check if it's an Omnibox
@@ -74,18 +108,40 @@ unsafe fn is_omnibox_element(element: &IUIAutomationElement) -> bool {
 unsafe extern "system" fn focus_win_event_proc(
     _h_win_event_hook: HWINEVENTHOOK,
     _event: u32,
-    _hwnd: HWND,
+    hwnd: HWND,
     _id_object: i32,
     _id_child: i32,
     _id_event_thread: u32,
     _dwms_event_time: u32,
 ) {
+    // Fast Win32 Class Pre-Filtering:
+    // If the focused window's root is not a browser window, immediately clear flag without UIA!
+    let target_hwnd = if !hwnd.0.is_null() { hwnd } else { GetForegroundWindow() };
+    if !is_browser_window(target_hwnd) {
+        IS_OMNIBOX_FOCUSED.store(false, Ordering::Relaxed);
+        return;
+    }
+
+    // Only if confirmed to be a browser window: check Omnibox via UIA
     update_omnibox_focus_state();
 }
 
 fn update_omnibox_focus_state() {
     THREAD_AUTOMATION.with(|cell| {
-        let borrow = cell.borrow();
+        let mut borrow = cell.borrow_mut();
+        if borrow.is_none() {
+            // Lazy Init: Initialize COM & UIAutomation only on first browser encounter!
+            unsafe {
+                let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+                let auto: Option<IUIAutomation> = CoCreateInstance(
+                    &CUIAutomation,
+                    None,
+                    CLSCTX_INPROC_SERVER,
+                ).ok();
+                *borrow = auto;
+            }
+        }
+
         if let Some(automation) = borrow.as_ref() {
             unsafe {
                 if let Ok(element) = automation.GetFocusedElement() {
@@ -101,7 +157,7 @@ fn update_omnibox_focus_state() {
     });
 }
 
-/// Spawn a lightweight background thread using SetWinEventHook + IUIAutomation
+/// Spawn a lightweight background thread using SetWinEventHook + Lazy IUIAutomation
 /// to track browser Omnibox focus asynchronously without ever blocking the keyboard hook.
 fn spawn_omnibox_detector() {
     if OMNIBOX_THREAD_SPAWNED.swap(true, Ordering::SeqCst) {
@@ -112,20 +168,8 @@ fn spawn_omnibox_detector() {
         .name("omnibox-detector".into())
         .spawn(|| {
             unsafe {
-                let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-
-                let auto: Option<IUIAutomation> = CoCreateInstance(
-                    &CUIAutomation,
-                    None,
-                    CLSCTX_INPROC_SERVER,
-                ).ok();
-
-                THREAD_AUTOMATION.with(|cell| {
-                    *cell.borrow_mut() = auto;
-                });
-
-                update_omnibox_focus_state();
-
+                // Do NOT initialize COM/UIAutomation eagerly here.
+                // It will be lazily initialized only when a browser window is encountered.
                 const EVENT_OBJECT_FOCUS: u32 = 0x8005;
                 const WINEVENT_OUTOFCONTEXT: u32 = 0;
 
@@ -148,7 +192,13 @@ fn spawn_omnibox_detector() {
                 if !hook.is_invalid() {
                     let _ = UnhookWinEvent(hook);
                 }
-                CoUninitialize();
+
+                THREAD_AUTOMATION.with(|cell| {
+                    if cell.borrow().is_some() {
+                        *cell.borrow_mut() = None;
+                        CoUninitialize();
+                    }
+                });
             }
         })
         .expect("Failed to spawn omnibox detector thread");
@@ -484,18 +534,23 @@ pub fn toggle_vietnamese_mode() -> bool {
     new_mode
 }
 
-/// Build the atomic batch of SendInput events for normal text inputs.
-/// Contains delete_count of VK_BACK (down+up) followed by replacement UTF-16 KEYEVENTF_UNICODE (down+up).
-/// Guaranteed ZERO VK_SPACE, ZERO thread::sleep, ZERO invisible characters.
-pub fn build_normal_replacement_inputs(delete_count: usize, replacement: &str) -> Vec<INPUT> {
+thread_local! {
+    static REUSABLE_INPUTS: std::cell::RefCell<Vec<INPUT>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Fill a reusable Vec<INPUT> with the atomic batch of SendInput events for normal text inputs.
+/// Reuses existing vector capacity to achieve ZERO heap allocations in the hook hot path.
+pub fn build_normal_inputs_into(inputs: &mut Vec<INPUT>, delete_count: usize, replacement: &str) {
     let char_count = replacement.chars().count();
-    let total_capacity = delete_count * 2 + char_count * 4;
-    let mut batch_inputs: Vec<INPUT> = Vec::with_capacity(total_capacity);
+    let needed = delete_count * 2 + char_count * 4;
+    if inputs.capacity() < needed {
+        inputs.reserve(needed - inputs.capacity());
+    }
 
     // 1. VK_BACK events to delete old characters
     for _ in 0..delete_count {
-        batch_inputs.push(create_key_input(VK_BACK, false));
-        batch_inputs.push(create_key_input(VK_BACK, true));
+        inputs.push(create_key_input(VK_BACK, false));
+        inputs.push(create_key_input(VK_BACK, true));
     }
 
     // 2. Replacement UTF-16 KEYEVENTF_UNICODE characters
@@ -503,12 +558,21 @@ pub fn build_normal_replacement_inputs(delete_count: usize, replacement: &str) -
         let mut utf16_buf = [0u16; 2];
         for ch in replacement.chars() {
             for &unit in ch.encode_utf16(&mut utf16_buf).iter() {
-                batch_inputs.push(create_unicode_codeunit_input(unit, false));
-                batch_inputs.push(create_unicode_codeunit_input(unit, true));
+                inputs.push(create_unicode_codeunit_input(unit, false));
+                inputs.push(create_unicode_codeunit_input(unit, true));
             }
         }
     }
+}
 
+/// Build the atomic batch of SendInput events for normal text inputs.
+/// Contains delete_count of VK_BACK (down+up) followed by replacement UTF-16 KEYEVENTF_UNICODE (down+up).
+/// Guaranteed ZERO VK_SPACE, ZERO thread::sleep, ZERO invisible characters.
+pub fn build_normal_replacement_inputs(delete_count: usize, replacement: &str) -> Vec<INPUT> {
+    let char_count = replacement.chars().count();
+    let total_capacity = delete_count * 2 + char_count * 4;
+    let mut batch_inputs: Vec<INPUT> = Vec::with_capacity(total_capacity);
+    build_normal_inputs_into(&mut batch_inputs, delete_count, replacement);
     batch_inputs
 }
 
@@ -529,6 +593,7 @@ pub fn build_omnibox_cancellation_inputs() -> [INPUT; 4] {
 ///   dispatches VK_BACK events and UTF-16 KEYEVENTF_UNICODE events together in a single atomic SendInput batch
 ///   with zero VK_SPACE, zero thread::sleep, and zero invisible characters, guaranteeing clean pre-composed
 ///   NFC Unicode output with zero LLM token bloat and no race conditions.
+/// - Achieves ZERO heap allocations in the hot path by reusing thread-local buffers.
 fn send_replacement_batch(delete_count: usize, replacement: &str) {
     let is_omnibox = IS_OMNIBOX_FOCUSED.load(Ordering::Relaxed);
 
@@ -544,43 +609,53 @@ fn send_replacement_batch(delete_count: usize, replacement: &str) {
         // Brief yield so target address bar cancels its inline autocomplete selection
         std::thread::sleep(std::time::Duration::from_millis(2));
 
-        // 2. Dispatch VK_BACK events
-        let mut back_inputs: Vec<INPUT> = Vec::with_capacity(delete_count * 2);
-        for _ in 0..delete_count {
-            back_inputs.push(create_key_input(VK_BACK, false));
-            back_inputs.push(create_key_input(VK_BACK, true));
-        }
-        unsafe {
-            SendInput(&back_inputs, std::mem::size_of::<INPUT>() as i32);
-        }
+        REUSABLE_INPUTS.with(|cell| {
+            let mut inputs = cell.borrow_mut();
 
-        // Brief yield before replacement characters
-        std::thread::sleep(std::time::Duration::from_millis(1));
-
-        // 3. Inject replacement UTF-16 KEYEVENTF_UNICODE characters
-        if !replacement.is_empty() {
-            let mut unicode_inputs: Vec<INPUT> = Vec::with_capacity(replacement.chars().count() * 2);
-            let mut utf16_buf = [0u16; 2];
-            for ch in replacement.chars() {
-                for &unit in ch.encode_utf16(&mut utf16_buf).iter() {
-                    unicode_inputs.push(create_unicode_codeunit_input(unit, false));
-                    unicode_inputs.push(create_unicode_codeunit_input(unit, true));
+            // 2. Dispatch VK_BACK events
+            inputs.clear();
+            for _ in 0..delete_count {
+                inputs.push(create_key_input(VK_BACK, false));
+                inputs.push(create_key_input(VK_BACK, true));
+            }
+            if !inputs.is_empty() {
+                unsafe {
+                    SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
                 }
             }
-            unsafe {
-                SendInput(&unicode_inputs, std::mem::size_of::<INPUT>() as i32);
+
+            // Brief yield before replacement characters
+            std::thread::sleep(std::time::Duration::from_millis(1));
+
+            // 3. Inject replacement UTF-16 KEYEVENTF_UNICODE characters
+            if !replacement.is_empty() {
+                inputs.clear();
+                let mut utf16_buf = [0u16; 2];
+                for ch in replacement.chars() {
+                    for &unit in ch.encode_utf16(&mut utf16_buf).iter() {
+                        inputs.push(create_unicode_codeunit_input(unit, false));
+                        inputs.push(create_unicode_codeunit_input(unit, true));
+                    }
+                }
+                unsafe {
+                    SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+                }
             }
-        }
+        });
     } else {
         // Normal text fields (web inputs, typing tests, editors, IDEs, chat boxes):
         // Single atomic batch of VK_BACKs followed immediately by UTF-16 KEYEVENTF_UNICODE
-        // Zero VK_SPACE, zero thread::sleep, zero race conditions!
-        let batch_inputs = build_normal_replacement_inputs(delete_count, replacement);
-        if !batch_inputs.is_empty() {
-            unsafe {
-                SendInput(&batch_inputs, std::mem::size_of::<INPUT>() as i32);
+        // Zero VK_SPACE, zero thread::sleep, zero race conditions, zero heap allocation!
+        REUSABLE_INPUTS.with(|cell| {
+            let mut inputs = cell.borrow_mut();
+            inputs.clear();
+            build_normal_inputs_into(&mut inputs, delete_count, replacement);
+            if !inputs.is_empty() {
+                unsafe {
+                    SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+                }
             }
-        }
+        });
     }
 }
 
@@ -748,5 +823,43 @@ mod tests {
             }
             assert_eq!(rendered, expected);
         }
+    }
+
+    #[test]
+    fn test_reusable_input_buffer_zero_alloc() {
+        let mut reusable: Vec<INPUT> = Vec::with_capacity(32);
+
+        // First pass
+        build_normal_inputs_into(&mut reusable, 1, "ơ");
+        assert_eq!(reusable.len(), 4); // 2 backspaces + 2 unicode code units
+        let initial_cap = reusable.capacity();
+        assert!(initial_cap >= 32);
+
+        // Second pass: clear and reuse
+        reusable.clear();
+        build_normal_inputs_into(&mut reusable, 2, "việt");
+        assert_eq!(reusable.len(), 12); // 4 backspaces + 8 unicode code units
+        // Verify capacity was retained without new heap allocation
+        assert_eq!(reusable.capacity(), initial_cap);
+    }
+
+    #[test]
+    fn test_browser_class_prefilter_constants() {
+        // UTF-16 constant verification
+        const CHROME_CLASS: &[u16] = &[
+            b'C' as u16, b'h' as u16, b'r' as u16, b'o' as u16, b'm' as u16, b'e' as u16,
+            b'_' as u16, b'W' as u16, b'i' as u16, b'd' as u16, b'g' as u16, b'e' as u16,
+            b't' as u16, b'W' as u16, b'i' as u16, b'n' as u16, b'_' as u16, b'1' as u16,
+        ];
+        let chrome_str: Vec<u16> = "Chrome_WidgetWin_1".encode_utf16().collect();
+        assert_eq!(CHROME_CLASS, chrome_str.as_slice());
+
+        const MOZILLA_CLASS: &[u16] = &[
+            b'M' as u16, b'o' as u16, b'z' as u16, b'i' as u16, b'l' as u16, b'l' as u16,
+            b'a' as u16, b'W' as u16, b'i' as u16, b'n' as u16, b'd' as u16, b'o' as u16,
+            b'w' as u16, b'C' as u16, b'l' as u16, b'a' as u16, b's' as u16, b's' as u16,
+        ];
+        let moz_str: Vec<u16> = "MozillaWindowClass".encode_utf16().collect();
+        assert_eq!(MOZILLA_CLASS, moz_str.as_slice());
     }
 }

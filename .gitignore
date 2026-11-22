@@ -29,3 +29,9 @@ edge_diag_profile*
 edge_test_profile*
 *.log
 scratch/
+
+# Local toolchain, cargo config & xwin SDK cache
+.cargo/
+.xwin-cache/
+.xwin/
+
