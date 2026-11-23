@@ -3,7 +3,7 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20x64-lightgrey.svg)]()
-[![Binary Size](https://img.shields.io/badge/Size-~176%20KB-success.svg)]()
+[![Binary Size](https://img.shields.io/badge/Size-~177%20KB-success.svg)]()
 [![Tests](https://img.shields.io/badge/Tests-19%2F19%20Passing-brightgreen.svg)]()
 
 **[Tiếng Việt](#tiếng-việt) | [English](#english)**
@@ -29,7 +29,7 @@
 
 **UniRust** là bộ gõ tiếng Việt (Telex) mã nguồn mở, được viết hoàn toàn bằng ngôn ngữ lập trình **Rust** cho hệ điều hành Windows x64. Dự án hướng tới tiêu chí: **siêu nhẹ, tốc độ phản hồi cực nhanh, không phụ thuộc thư viện ngoài (zero external DLL/C-runtime dependencies)** và xuất chuẩn ký tự **Unicode dựng sẵn (NFC)** nguyên bản.
 
-- **Kích thước siêu nhỏ gọn:** Tệp thực thi độc lập (standalone `.exe`) chỉ khoảng **~176 KB** (180.224 bytes ở bản release), không cần cài đặt, không cần .NET Framework hay Visual C++ Redistributable.
+- **Kích thước siêu nhỏ gọn:** Tệp thực thi độc lập (standalone `.exe`) chỉ khoảng **~177 KB** (181.248 bytes ở bản release), không cần cài đặt, không cần .NET Framework hay Visual C++ Redistributable.
 - **Bộ nhớ siêu nhẹ & Ổn định (RAM ~2–4 MB):** Khởi tạo lười UI Automation (Lazy UIA) với bộ lọc nhanh Win32 class `GetClassNameW` (chỉ kích hoạt UIA khi người dùng thực sự focus vào Chrome/Edge/Firefox), hot path tái sử dụng bộ đệm zero-heap-allocation, và cơ chế One-Shot Working Set Trim tự động thu hồi bộ nhớ sau 2.5s khởi động mà không cần phụ thuộc `psapi.dll`.
 - **Không inject DLL:** Chạy hoàn toàn dưới dạng tiến trình nền độc lập thông qua Win32 Low-Level Hooks (`WH_KEYBOARD_LL`, `WH_MOUSE_LL`).
 - **Unicode NFC chuẩn mực (Zero AI Token Bloat):** Tạo trực tiếp các ký tự tiếng Việt dựng sẵn (pre-composed NFC), tuyệt đối không sinh ký tự tổ hợp rời rạc (NFD combining marks `U+0300..=U+036F`) hay các ký tự ẩn độ rộng bằng không (`U+200B`, `U+2060`, `U+FEFF`). Điều này giúp tránh triệt để tình trạng phình to token (token bloat) hoặc lỗi xử lý ngữ cảnh khi nhập liệu vào các mô hình AI/LLM (ChatGPT, Claude, Gemini, Cursor, Copilot).
@@ -135,6 +135,8 @@ Dự án đã khảo sát và đối chiếu trực tiếp các tệp mã nguồ
 6. **Tối ưu hóa bộ nhớ RAM & Không phân mảnh Heap (Zero-Allocation Hot Path & One-Shot Trim):**
    - Toàn bộ hot path gõ phím và thuật toán bỏ dấu tiếng Việt sử dụng thread-local reusable buffer và mảng cố định trên stack (`build_normal_inputs_into`), triệt tiêu hoàn toàn việc cấp phát heap liên tục khi gõ nhanh.
    - Sau khi khởi động 2.5 giây, một timer duy nhất kích hoạt gọi `SetProcessWorkingSetSizeEx` từ `kernel32.dll` rồi tự hủy vĩnh viễn, thu hồi các trang nhớ khởi động đưa RAM hiển thị về ~2–4 MB mà không cần phụ thuộc `psapi.dll`.
+7. **Nhúng siêu dữ liệu PE Version Resource chuẩn Windows (PE Version Info):**
+   - Tệp nhúng sẵn siêu dữ liệu định danh trực tiếp vào Portable Executable (`build.rs` kết hợp `winresource`): hiển thị chi tiết tên sản phẩm (`UniRust`), mô tả file, tác giả (`Phạm Ngọc Trí (NPTBuy)`), bản quyền GNU GPL v3.0 và phiên bản đồng bộ `0.1.3` trong Windows File Properties -> Details và Task Manager mà không cần chứng chỉ số tự ký.
 
 ---
 
@@ -248,7 +250,7 @@ Dự án tuân thủ nghiêm ngặt và trân trọng quyền tác giả đối 
 
 **UniRust** is an open-source, lightweight, high-performance Vietnamese Input Method Editor (IME) written purely in **Rust** for Windows x64. The project is engineered for: **minimal binary footprint, blazing-fast input response, zero external DLL or C-runtime dependencies**, and **strict pre-composed NFC Unicode output**.
 
-- **Ultra-Compact Footprint:** Standalone binary size is only **~176 KB** (180,224 bytes in release build), requiring no installer, no .NET Framework, and no Visual C++ Redistributable runtime.
+- **Ultra-Compact Footprint:** Standalone binary size is only **~177 KB** (181,248 bytes in release build), requiring no installer, no .NET Framework, and no Visual C++ Redistributable runtime.
 - **Ultra-Lean Memory Footprint (RAM ~2–4 MB):** Lazy UI Automation with fast Win32 class pre-filtering (`GetClassNameW`), zero-heap-allocation reusable hot-path buffers, and a clean one-shot Working Set trim via `kernel32.dll` 2.5s post-startup (zero `psapi.dll` dependency).
 - **Zero DLL Injection:** Operates entirely as a clean, in-process background application using standard Win32 Low-Level Hooks (`WH_KEYBOARD_LL`, `WH_MOUSE_LL`).
 - **Strict Pre-composed NFC Unicode (Zero AI Token Bloat):** Generates true pre-composed NFC Unicode code points directly. It strictly avoids decomposed combining marks (NFD `U+0300..=U+036F`) and zero-width invisible characters (`U+200B`, `U+2060`, `U+FEFF`), eliminating token bloat and context corruption when prompting AI/LLM tools (ChatGPT, Claude, Gemini, Cursor, Copilot).
@@ -354,6 +356,8 @@ This project inspected and cross-referenced official reference source code from 
 6. **Zero-Allocation Hot Path & One-Shot Working Set Trim:**
    - Normal typing transforms and syllable tone adjustments use thread-local reusable buffers and stack-allocated arrays (`build_normal_inputs_into`), eliminating runtime heap allocations during fast typing.
    - Exactly 2.5 seconds after startup, a one-shot hidden-window timer triggers `SetProcessWorkingSetSizeEx` from `kernel32.dll` (no `psapi.dll` dependency) and immediately disarms itself, reclaiming one-time startup initialization pages and dropping resident RAM to ~2–4 MB.
+7. **Native Windows PE Version Resource Metadata (PE Version Info):**
+   - Embedded PE metadata directly in the executable via `build.rs` and `winresource`: surfaces full product details (`UniRust`), file description, author (`Phạm Ngọc Trí (NPTBuy)`), GNU GPL v3.0 copyright, and synced version `0.1.3` in Windows File Properties -> Details and Task Manager without requiring self-signed digital certificates.
 
 ---
 
